@@ -1,4 +1,4 @@
-name: build-apk.yml
+name: Build Android APK
 
 on:
   workflow_dispatch:
@@ -11,82 +11,182 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Java
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Godot 4.4.1 and Android templates
+      - name: Setup Android paths
         shell: bash
         run: |
           set -euo pipefail
-          base=https://github.com/godotengine/godot/releases/download/4.4.1-stable
-          wget -q "$base/Godot_v4.4.1-stable_linux.x86_64.zip"
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PATH=$HOME/.android/debug.keystore" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_USER=androiddebugkey" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD=android" >> "$GITHUB_ENV"
+
+          test -d "$ANDROID_SDK_ROOT"
+          test -d "$JAVA_HOME"
+
+          echo "Android SDK: $ANDROID_SDK_ROOT"
+          echo "Java JDK: $JAVA_HOME"
+
+      - name: Install Godot 4.4.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/godotengine/godot/releases/download/4.4.1-stable"
+
+          wget -q "$BASE/Godot_v4.4.1-stable_linux.x86_64.zip"
           unzip -q Godot_v4.4.1-stable_linux.x86_64.zip
           sudo install -m 755 Godot_v4.4.1-stable_linux.x86_64 /usr/local/bin/godot
-          rm Godot_v4.4.1-stable_linux.x86_64.zip
 
-          wget -q "$base/Godot_v4.4.1-stable_export_templates.tpz"
+          wget -q "$BASE/Godot_v4.4.1-stable_export_templates.tpz"
           unzip -q Godot_v4.4.1-stable_export_templates.tpz
+
           mkdir -p "$HOME/.local/share/godot/export_templates/4.4.1.stable"
           cp -a templates/. "$HOME/.local/share/godot/export_templates/4.4.1.stable/"
-          rm -rf templates Godot_v4.4.1-stable_export_templates.tpz
 
-      - name: Install Android SDK components
+          godot --headless --version
+
+      - name: Install Android SDK
         shell: bash
         run: |
           set -euo pipefail
-          sdkmanager="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
-          yes | "$sdkmanager" --licenses || true
-          "$sdkmanager" --install 'platform-tools' 'platforms;android-34' 'build-tools;34.0.0'
+          SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
 
-      - name: Configure Keystore and Editor Settings
+          yes | "$SDKMANAGER" --licenses || true
+
+          "$SDKMANAGER" --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+          test -f "$ANDROID_SDK_ROOT/platform-tools/adb"
+          test -f "$ANDROID_SDK_ROOT/build-tools/35.0.0/apksigner"
+
+      - name: Generate debug keystore
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p build "$HOME/.android" "$HOME/.config/godot"
+          mkdir -p "$HOME/.android" build
 
-          keytool -genkeypair -noprompt \
+          keytool -genkeypair \
+            -noprompt \
             -keystore "$HOME/.android/debug.keystore" \
-            -storepass android -keypass android -alias androiddebugkey \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname 'CN=Android Debug,O=Android,C=US'
+            -storepass android \
+            -keypass android \
+            -alias androiddebugkey \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
 
-          cat <<EOF > "$HOME/.config/godot/editor_settings-4.tres"
-[gd_resource type="EditorSettings" format=3]
+          test -s "$HOME/.android/debug.keystore"
 
-[resource]
-export/android/android_sdk_path = "$ANDROID_SDK_ROOT"
-export/android/java_sdk_path = "$JAVA_HOME"
-export/android/debug_keystore = "$HOME/.android/debug.keystore"
-export/android/debug_keystore_user = "androiddebugkey"
-export/android/debug_keystore_pass = "android"
-export/android/shutdown_adb_on_exit = false
-EOF
+      - name: Configure Godot paths
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          godot --headless --editor --path . --quit
 
           python3 - <<'PY'
+          import os
           import re
+          import json
           from pathlib import Path
 
-          preset = Path('export_presets.cfg')
+          home = Path.home()
+          settings_dir = home / ".config/godot"
+          settings_dir.mkdir(parents=True, exist_ok=True)
+
+          values = {
+              "export/android/android_sdk_path": os.environ["ANDROID_SDK_ROOT"],
+              "export/android/java_sdk_path": os.environ["JAVA_HOME"],
+              "export/android/debug_keystore": str(home / ".android/debug.keystore"),
+              "export/android/debug_keystore_user": "androiddebugkey",
+              "export/android/debug_keystore_pass": "android",
+          }
+
+          candidates = [
+              settings_dir / "editor_settings-4.tres",
+              settings_dir / "editor_settings-4.4.tres",
+          ]
+
+          for settings in candidates:
+              if settings.exists():
+                  data = settings.read_text()
+              else:
+                  data = '[gd_resource type="EditorSettings" format=3]\n\n[resource]\n'
+
+              if "[resource]" not in data:
+                  raise SystemExit(f"Invalid editor settings: {settings}")
+
+              for key in values:
+                  data = re.sub(
+                      r"(?m)^" + re.escape(key) + r"\s*=.*(?:\n|$)",
+                      "",
+                      data
+                  )
+
+              additions = "".join(
+                  f"{key} = {json.dumps(value)}\n"
+                  for key, value in values.items()
+              )
+
+              data = data.replace(
+                  "[resource]",
+                  "[resource]\n" + additions,
+                  1
+              )
+
+              settings.write_text(data)
+              print("Configured:", settings)
+
+          preset = Path("export_presets.cfg")
           if not preset.exists():
-              raise SystemExit("Error: export_presets.cfg file nahi mili!")
+              raise SystemExit("Missing export_presets.cfg")
 
           data = preset.read_text()
-          data = re.sub(r'keystore/debug\s*=.*', f'keystore/debug="{Path.home()}/.android/debug.keystore"', data)
-          data = re.sub(r'keystore/debug_user\s*=.*', 'keystore/debug_user="androiddebugkey"', data)
-          data = re.sub(r'keystore/debug_password\s*=.*', 'keystore/debug_password="android"', data)
+
+          replacements = {
+              "keystore/debug": str(home / ".android/debug.keystore"),
+              "keystore/debug_user": "androiddebugkey",
+              "keystore/debug_password": "android",
+          }
+
+          for key, value in replacements.items():
+              pattern = r"(?m)^" + re.escape(key) + r"\s*=.*$"
+              if not re.search(pattern, data):
+                  raise SystemExit(f"Missing preset option: {key}")
+              data = re.sub(
+                  pattern,
+                  lambda m: key + "=" + json.dumps(value),
+                  data
+              )
+
           preset.write_text(data)
-          print("Presets updated.")
+          print("Android export preset configured")
           PY
 
-      - name: Build Android APK
+      - name: Build APK
         shell: bash
         run: |
           set -euo pipefail
-          godot --headless --path . --export-debug "Android" build/FriendsBattleGround.apk
+
+          "$ANDROID_SDK_ROOT/platform-tools/adb" start-server
+
+          mkdir -p build
+
+          godot --headless --path . \
+            --export-debug "Android" \
+            build/FriendsBattleGround.apk
+
           test -s build/FriendsBattleGround.apk
+
+          echo "APK CREATED"
           ls -lh build/FriendsBattleGround.apk
 
       - name: Upload APK
