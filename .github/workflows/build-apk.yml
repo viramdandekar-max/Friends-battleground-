@@ -8,95 +8,44 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Java 17
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Godot and templates
-        shell: bash
-        run: |
-          set -euo pipefail
-          BASE=https://github.com/godotengine/godot/releases/download/4.4.1-stable
-
-          wget -q "$BASE/Godot_v4.4.1-stable_linux.x86_64.zip"
-          unzip -q Godot_v4.4.1-stable_linux.x86_64.zip
-          sudo install -m755 Godot_v4.4.1-stable_linux.x86_64 /usr/local/bin/godot
-
-          wget -q "$BASE/Godot_v4.4.1-stable_export_templates.tpz"
-          unzip -q Godot_v4.4.1-stable_export_templates.tpz
-
-          mkdir -p "$HOME/.local/share/godot/export_templates/4.4.1.stable"
-          cp -a templates/. "$HOME/.local/share/godot/export_templates/4.4.1.stable/"
-
-          test -s "$HOME/.local/share/godot/export_templates/4.4.1.stable/android_debug.apk"
-
-      - name: Install Godot 4.4 Android requirements
+      - name: Install Godot
         shell: bash
         run: |
           set -euo pipefail
 
-          SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
-          yes | "$SDKMANAGER" --licenses || true
+          VERSION="4.4.1"
+          BASE="https://github.com/godotengine/godot/releases/download/${VERSION}-stable"
 
-          "$SDKMANAGER" --install \
-            'platform-tools' \
-            'build-tools;34.0.0' \
-            'platforms;android-34' \
-            'cmdline-tools;latest' \
-            'cmake;3.10.2.4988404' \
-            'ndk;23.2.8568313'
+          wget -q "$BASE/Godot_v${VERSION}-stable_linux.x86_64.zip"
+          unzip -q "Godot_v${VERSION}-stable_linux.x86_64.zip"
 
-          test -x "$ANDROID_SDK_ROOT/platform-tools/adb"
-          test -f "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner"
-          test -d "$JAVA_HOME"
+          sudo install -m755 \
+            "Godot_v${VERSION}-stable_linux.x86_64" \
+            /usr/local/bin/godot
 
-      - name: Configure Godot editor and signing
+          wget -q "$BASE/Godot_v${VERSION}-stable_export_templates.tpz"
+
+          unzip -q "Godot_v${VERSION}-stable_export_templates.tpz"
+
+          TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/${VERSION}.stable"
+
+          mkdir -p "$TEMPLATE_DIR"
+          cp -a templates/. "$TEMPLATE_DIR/"
+
+          test -s "$TEMPLATE_DIR/android_debug.apk"
+
+      - name: Install Android SDK
         shell: bash
         run: |
           set -euo pipefail
 
-          mkdir -p build "$HOME/.android" "$HOME/.config/godot"
-
-          # 1. Generate Debug Keystore if missing
-          KEYSTORE_PATH="$HOME/.android/debug.keystore"
-          if [ ! -f "$KEYSTORE_PATH" ]; then
-            keytool -genkeypair -noprompt \
-              -keystore "$KEYSTORE_PATH" \
-              -storepass android \
-              -keypass android \
-              -alias androiddebugkey \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname 'CN=Android Debug,O=Android,C=US'fi
-
-          # 2. Write Editor Settings directly
-          cat <<EOF > "$HOME/.config/godot/editor_settings-4.4.tres"
-[gd_resource type="EditorSettings" format=3]
-
-[resource]
-export/android/android_sdk_path = "$ANDROID_SDK_ROOT"
-export/android/java_sdk_path = "$JAVA_HOME"
-export/android/debug_keystore = "$KEYSTORE_PATH"
-export/android/debug_keystore_user = "androiddebugkey"
-export/android/debug_keystore_pass = "android"
-EOF
-
-      - name: Export Android APK
-        shell: bash
-        run: |
-          set -euo pipefail
-          # सुनिश्चित करें कि आपके प्रोजेक्ट की export_presets.cfg में प्रीसेट का नाम "Android" ही है
-          godot --headless --export-debug "Android" build/game-debug.apk
-
-      - name: Upload APK Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: game-android-apk
-          path: build/game-debug.apk
-          if-no-files-found: error
+          SDKMANAGER="$ANDROID_SDK_ROOT
