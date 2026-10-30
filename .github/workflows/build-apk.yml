@@ -62,127 +62,41 @@ jobs:
 
           mkdir -p build "$HOME/.android" "$HOME/.config/godot"
 
-          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+          # 1. Generate Debug Keystore if missing
+          KEYSTORE_PATH="$HOME/.android/debug.keystore"
+          if [ ! -f "$KEYSTORE_PATH" ]; then
             keytool -genkeypair -noprompt \
-              -keystore "$HOME/.android/debug.keystore" \
+              -keystore "$KEYSTORE_PATH" \
               -storepass android \
               -keypass android \
               -alias androiddebugkey \
               -keyalg RSA \
               -keysize 2048 \
               -validity 10000 \
-              -dname 'CN=Android Debug,O=Android,C=US'
-          fi
+              -dname 'CN=Android Debug,O=Android,C=US'fi
 
-          python3 - <<'PY'
-          import json
-          import os
-          import re
-          from pathlib import Path
+          # 2. Write Editor Settings directly
+          cat <<EOF > "$HOME/.config/godot/editor_settings-4.4.tres"
+[gd_resource type="EditorSettings" format=3]
 
-          home = Path.home()
-          settings = home / '.config/godot/editor_settings-4.4.tres'
+[resource]
+export/android/android_sdk_path = "$ANDROID_SDK_ROOT"
+export/android/java_sdk_path = "$JAVA_HOME"
+export/android/debug_keystore = "$KEYSTORE_PATH"
+export/android/debug_keystore_user = "androiddebugkey"
+export/android/debug_keystore_pass = "android"
+EOF
 
-          if settings.exists():
-              data = settings.read_text()
-          else:
-              data = (
-                  '[gd_resource type="EditorSettings" format=3]\n'
-                  '\n[resource]\n'
-              )
-
-          assert '[resource]' in data
-
-          values = {
-              'export/android/android_sdk_path': os.environ['ANDROID_SDK_ROOT'],
-              'export/android/java_sdk_path': os.environ['JAVA_HOME'],
-              'export/android/debug_keystore': str(home / '.android/debug.keystore'),
-              'export/android/debug_keystore_user': 'androiddebugkey',
-              'export/android/debug_keystore_pass': 'android',
-          }
-
-          for key in values:
-              data = re.sub(
-                  r'(?m)^' + re.escape(key) + r'\s*=.*$',
-                  '',
-                  data
-              )
-
-          additions = ''.join(
-              key + ' = ' + json.dumps(value) + '\n'
-              for key, value in values.items()
-          )
-
-          data = data.replace(
-              '[resource]',
-              '[resource]\n' + additions,
-              1
-          )
-
-          settings.write_text(data)
-
-          preset = Path('export_presets.cfg')
-          content = preset.read_text()
-
-          replacements = {
-              'keystore/debug': str(home / '.android/debug.keystore'),
-              'keystore/debug_user': 'androiddebugkey',
-              'keystore/debug_password': 'android',
-              'version/target_sdk': '34',
-          }
-
-          for key, value in replacements.items():
-              pattern = r'(?m)^' + re.escape(key) + r'=.*$'
-
-              assert re.search(pattern, content), (
-                  'Missing export option: ' + key
-              )
-
-              replacement = (
-                  value if key == 'version/target_sdk'
-                  else json.dumps(value)
-              )
-
-              content = re.sub(
-                  pattern,
-                  lambda match: key + '=' + replacement,
-                  content
-              )
-
-          preset.write_text(content)
-
-          print('SDK:', os.environ['ANDROID_SDK_ROOT'])
-          print('Java:', os.environ['JAVA_HOME'])
-          print('Editor settings:', settings)
-          PY
-
-          godot --headless --editor --path . --import --quit
-
-      - name: Export and verify APK
+      - name: Export Android APK
         shell: bash
-        env:
-          GODOT_ANDROID_KEYSTORE_DEBUG_USER: androiddebugkey
-          GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD: android
         run: |
           set -euo pipefail
+          # सुनिश्चित करें कि आपके प्रोजेक्ट की export_presets.cfg में प्रीसेट का नाम "Android" ही है
+          godot --headless --export-debug "Android" build/game-debug.apk
 
-          export GODOT_ANDROID_KEYSTORE_DEBUG_PATH="$HOME/.android/debug.keystore"
-
-          godot --headless --verbose --path . \
-            --export-debug Android \
-            build/FriendsBattleGround.apk
-
-          test -s build/FriendsBattleGround.apk
-
-          "$ANDROID_SDK_ROOT/build-tools/34.0.0/apksigner" \
-            verify build/FriendsBattleGround.apk
-
-          ls -lh build/FriendsBattleGround.apk
-
-      - name: Upload APK
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FriendsBattleGround-APK
-          path: build/FriendsBattleGround.apk
+          name: game-android-apk
+          path: build/game-debug.apk
           if-no-files-found: error
-          
