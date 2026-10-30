@@ -1,4 +1,3 @@
-
 name: Build Android APK
 
 on:
@@ -7,76 +6,127 @@ on:
 jobs:
   build:
     runs-on: ubuntu-24.04
+
     steps:
-      - name: Checkout project
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Java 17
+      - name: Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Godot 4.4.1 and export templates
+      - name: Install Godot
         shell: bash
         run: |
           set -euo pipefail
-          wget -q https://github.com/godotengine/godot/releases/download/4.4.1-stable/Godot_v4.4.1-stable_linux.x86_64.zip
+          BASE="https://github.com/godotengine/godot/releases/download/4.4.1-stable"
+          wget -q "$BASE/Godot_v4.4.1-stable_linux.x86_64.zip"
           unzip -q Godot_v4.4.1-stable_linux.x86_64.zip
           sudo install -m 755 Godot_v4.4.1-stable_linux.x86_64 /usr/local/bin/godot
-          wget -q https://github.com/godotengine/godot/releases/download/4.4.1-stable/Godot_v4.4.1-stable_export_templates.tpz
+          wget -q "$BASE/Godot_v4.4.1-stable_export_templates.tpz"
           unzip -q Godot_v4.4.1-stable_export_templates.tpz
           mkdir -p "$HOME/.local/share/godot/export_templates/4.4.1.stable"
-          cp -r templates/. "$HOME/.local/share/godot/export_templates/4.4.1.stable/"
+          cp -a templates/. "$HOME/.local/share/godot/export_templates/4.4.1.stable/"
 
-      - name: Install Android SDK packages
+      - name: Install Android SDK
         shell: bash
         run: |
           set -euo pipefail
           SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           yes | "$SDKMANAGER" --licenses || true
-          "$SDKMANAGER" --install "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          "$SDKMANAGER" --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
-      - name: Configure Godot Android export
+      - name: Configure Android export
         shell: bash
         run: |
           set -euo pipefail
-          godot --headless --editor --path . --quit
           mkdir -p build "$HOME/.android"
-          keytool -genkeypair -keystore "$HOME/.android/debug.keystore" \
-            -storepass android -alias androiddebugkey -keypass android \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=Android Debug,O=Android,C=US" -noprompt
+
+          keytool -genkeypair \
+            -keystore "$HOME/.android/debug.keystore" \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US" \
+            -noprompt
+
+          godot --headless --editor --path . --quit
+
           python3 - <<'PY'
-          import json
           import os
+          import json
           import re
           from pathlib import Path
 
-          settings = Path.home() / '.config/godot/editor_settings-4.tres'
-          if not settings.exists():
-              raise SystemExit(f'Missing Godot editor settings: {settings}')
-          data = settings.read_text()
-          if '[resource]' not in data:
-              raise SystemExit('Missing [resource] section in Godot settings')
+          home = Path.home()
+          candidates = [
+              home / ".config/godot/editor_settings-4.tres",
+              home / ".local/share/godot/editor_settings-4.tres",
+          ]
+          existing = next((p for p in candidates if p.exists()), None)
+          settings = existing or candidates[0]
+          settings.parent.mkdir(parents=True, exist_ok=True)
+
+          if settings.exists():
+              data = settings.read_text()
+          else:
+              data = (
+                  '[gd_resource type="EditorSettings" format=3]\n'
+                  '\n[resource]\n'
+              )
+
+          if "[resource]" not in data:
+              raise SystemExit("Invalid Godot editor settings format")
+
           values = {
-              'export/android/android_sdk_path': os.environ['ANDROID_SDK_ROOT'],
-              'export/android/java_sdk_path': os.environ['JAVA_HOME'],
-              'export/android/debug_keystore': str(Path.home() / '.android/debug.keystore'),
-              'export/android/debug_keystore_user': 'androiddebugkey',
-              'export/android/debug_keystore_pass': 'android',
+              "export/android/android_sdk_path":
+                  os.environ["ANDROID_SDK_ROOT"],
+              "export/android/java_sdk_path":
+                  os.environ["JAVA_HOME"],
+              "export/android/debug_keystore":
+                  str(home / ".android/debug.keystore"),
+              "export/android/debug_keystore_user":
+                  "androiddebugkey",
+              "export/android/debug_keystore_pass":
+                  "android",
           }
-          for key in values:
-              data = re.sub(r'(?m)^' + re.escape(key) + r'\s*=.*\n', '', data)
-          block = '\n' + ''.join(f'{key} = {json.dumps(value)}\n' for key, value in values.items())
-          settings.write_text(data.replace('[resource]', '[resource]' + block, 1))
+
+          for key, value in values.items():
+              data = re.sub(
+                  r"(?m)^" + re.escape(key) + r"\s*=.*\n",
+                  "",
+                  data,
+              )
+
+          additions = "".join(
+              f"{key} = {json.dumps(value)}\n"
+              for key, value in values.items()
+          )
+          data = data.replace(
+              "[resource]",
+              "[resource]\n" + additions,
+              1,
+          )
+          settings.write_text(data)
+          print("Godot settings written to:", settings)
           PY
 
-      - name: Build debug APK
+      - name: Build APK
         shell: bash
         run: |
           set -euo pipefail
-          godot --headless --path . --export-debug "Android" build/FriendsBattleGround.apk
+          mkdir -p build
+          godot --headless --path . \
+            --export-debug "Android" \
+            build/FriendsBattleGround.apk
           test -s build/FriendsBattleGround.apk
 
       - name: Upload APK
