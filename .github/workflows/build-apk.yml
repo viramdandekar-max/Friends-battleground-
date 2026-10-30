@@ -22,23 +22,43 @@ jobs:
           wget -q https://github.com/godotengine/godot/releases/download/4.4.1-stable/Godot_v4.4.1-stable_linux.x86_64.zip
           unzip -q Godot_v4.4.1-stable_linux.x86_64.zip
           sudo mv Godot_v4.4.1-stable_linux.x86_64 /usr/local/bin/godot
-          chmod +x /usr/local/bin/godot
+          sudo chmod +x /usr/local/bin/godot
 
-      - name: Install export templates
+      - name: Install Godot export templates
         run: |
           wget -q https://github.com/godotengine/godot/releases/download/4.4.1-stable/Godot_v4.4.1-stable_export_templates.tpz
-          mkdir -p ~/.local/share/godot/export_templates/4.4.1.stable
           unzip -q Godot_v4.4.1-stable_export_templates.tpz
+          mkdir -p ~/.local/share/godot/export_templates/4.4.1.stable
           cp templates/* ~/.local/share/godot/export_templates/4.4.1.stable/
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Configure Android SDK
+        run: |
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
 
       - name: Install Android packages
         run: |
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          yes | sdkmanager --licenses || true
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
-      - name: Configure Android export
+      - name: Configure Godot
         run: |
           godot --headless --editor --path . --quit
           mkdir -p build
+
+      - name: Build APK
+        run: |
+          godot --headless --path . \
+            --export-debug "Android" \
+            build/FriendsBattleGround.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FriendsBattleGround-APK
+          path: build/FriendsBattleGround.apk
+          if-no-files-found: error
