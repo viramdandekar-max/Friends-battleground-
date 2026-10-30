@@ -2,6 +2,9 @@ name: Build Android APK
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
   build:
@@ -33,7 +36,6 @@ jobs:
             /usr/local/bin/godot
 
           wget -q "$BASE/Godot_v${VERSION}-stable_export_templates.tpz"
-
           unzip -q "Godot_v${VERSION}-stable_export_templates.tpz"
 
           TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/${VERSION}.stable"
@@ -48,4 +50,42 @@ jobs:
         run: |
           set -euo pipefail
 
-          SDKMANAGER="$ANDROID_SDK_ROOT
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+
+          test -x "$SDKMANAGER"
+
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+
+          "$SDKMANAGER" \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+
+      - name: Import Godot Project
+        run: |
+          godot --headless --path . --editor --quit
+
+      - name: Build Debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p build
+
+          godot --headless \
+            --path . \
+            --export-debug "Android" \
+            build/FriendsBattleGround.apk
+
+          test -s build/FriendsBattleGround.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FriendsBattleGround-APK
+          path: build/FriendsBattleGround.apk
+          if-no-files-found: error
